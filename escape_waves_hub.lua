@@ -394,13 +394,14 @@ createToggle("autoSteal", "Auto Steal Blocks", 12, function(enabled)
 end)
 
 -- =============================================
--- ANTI-SNAPBACK TELEPORT SYSTEM
+-- ADVANCED TELEPORT SYSTEM (Multi-Method)
 -- =============================================
 
 local savedBasePos = nil
 local isTeleporting = false
+local teleportMethod = 1 -- Current method (cycles 1-4)
 
--- Remove all BodyMovers that pull character back
+-- Remove all BodyMovers/Constraints that pull character back
 local function removeBodyMovers()
     if not character then return end
     pcall(function()
@@ -409,7 +410,8 @@ local function removeBodyMovers()
                part:IsA("BodyGyro") or part:IsA("BodyForce") or
                part:IsA("BodyAngularVelocity") or part:IsA("BodyThrust") or
                part:IsA("RocketPropulsion") or part:IsA("LinearVelocity") or
-               part:IsA("AlignPosition") then
+               part:IsA("AlignPosition") or part:IsA("AlignOrientation") or
+               part:IsA("VectorForce") or part:IsA("LineForce") then
                 part:Destroy()
             end
         end
@@ -427,36 +429,145 @@ local function zeroVelocity()
     end)
 end
 
--- Persistent teleport: sets CFrame repeatedly to prevent snapback
-local function persistentTeleport(targetCFrame)
-    if isTeleporting then return end
-    isTeleporting = true
-    
+-- METHOD 1: Anchor Freeze Teleport
+-- Anchors rootPart so physics cant move it, sets CFrame, unanchors after delay
+local function anchorTeleport(targetCFrame)
     spawn(function()
-        -- Phase 1: Remove forces & initial teleport
-        removeBodyMovers()
-        zeroVelocity()
-        
-        -- Phase 2: Hold position for 30 frames (~0.5 seconds)
-        local holdFrames = 30
-        local conn
-        local count = 0
-        
-        conn = RunService.Heartbeat:Connect(function()
-            count = count + 1
+        pcall(function()
+            removeBodyMovers()
+            zeroVelocity()
+            rootPart.Anchored = true
+            rootPart.CFrame = targetCFrame
+            wait(0.5)
+            rootPart.CFrame = targetCFrame
+            wait(0.3)
+            rootPart.Anchored = false
+            zeroVelocity()
+            removeBodyMovers()
+        end)
+        -- Hold briefly after unanchor
+        for i = 1, 10 do
+            wait(0.05)
             pcall(function()
                 rootPart.CFrame = targetCFrame
                 zeroVelocity()
-                removeBodyMovers()
             end)
-            
-            if count >= holdFrames then
-                conn:Disconnect()
-                isTeleporting = false
-                print("Teleport complete!")
-            end
-        end)
+        end
+        isTeleporting = false
+        print("Method 1 (Anchor) complete!")
     end)
+end
+
+-- METHOD 2: Incremental Step Teleport
+-- Moves in many small steps so each step looks like normal movement
+local function stepTeleport(targetCFrame)
+    spawn(function()
+        pcall(function()
+            removeBodyMovers()
+            local startPos = rootPart.Position
+            local targetPos = targetCFrame.Position
+            local distance = (targetPos - startPos).Magnitude
+            
+            -- Calculate steps: max 50 studs per step
+            local stepSize = 50
+            local steps = math.max(math.ceil(distance / stepSize), 1)
+            
+            for i = 1, steps do
+                local alpha = i / steps
+                local midPos = startPos:Lerp(targetPos, alpha)
+                rootPart.CFrame = CFrame.new(midPos)
+                zeroVelocity()
+                removeBodyMovers()
+                wait(0.05)
+            end
+            
+            -- Final lock
+            rootPart.CFrame = targetCFrame
+            zeroVelocity()
+        end)
+        isTeleporting = false
+        print("Method 2 (Step) complete!")
+    end)
+end
+
+-- METHOD 3: Tween Teleport
+-- Uses TweenService for smooth movement that looks natural
+local function tweenTeleport(targetCFrame)
+    spawn(function()
+        pcall(function()
+            removeBodyMovers()
+            zeroVelocity()
+            
+            local distance = (targetCFrame.Position - rootPart.Position).Magnitude
+            local speed = 300 -- studs per second
+            local duration = math.max(distance / speed, 0.3)
+            duration = math.min(duration, 3) -- cap at 3 seconds
+            
+            local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Linear)
+            local tween = TweenService:Create(rootPart, tweenInfo, {CFrame = targetCFrame})
+            tween:Play()
+            tween.Completed:Wait()
+            
+            -- Final lock
+            rootPart.CFrame = targetCFrame
+            zeroVelocity()
+            removeBodyMovers()
+        end)
+        isTeleporting = false
+        print("Method 3 (Tween) complete!")
+    end)
+end
+
+-- METHOD 4: BodyPosition Teleport
+-- Creates a BodyPosition to pull character to target (game-legit physics)
+local function bodyPosTeleport(targetCFrame)
+    spawn(function()
+        pcall(function()
+            removeBodyMovers()
+            zeroVelocity()
+            
+            -- Create a BodyPosition to pull us there
+            local bp = Instance.new("BodyPosition")
+            bp.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+            bp.D = 100
+            bp.P = 50000
+            bp.Position = targetCFrame.Position
+            bp.Parent = rootPart
+            
+            -- Wait until we arrive or timeout
+            local startTime = tick()
+            while tick() - startTime < 5 do
+                local dist = (rootPart.Position - targetCFrame.Position).Magnitude
+                if dist < 5 then break end
+                wait(0.1)
+            end
+            
+            -- Clean up
+            bp:Destroy()
+            rootPart.CFrame = targetCFrame
+            zeroVelocity()
+        end)
+        isTeleporting = false
+        print("Method 4 (BodyPosition) complete!")
+    end)
+end
+
+-- Main teleport function: tries current method
+local function smartTeleport(targetCFrame)
+    if isTeleporting then return end
+    isTeleporting = true
+    
+    print("Teleporting with Method " .. teleportMethod .. "...")
+    
+    if teleportMethod == 1 then
+        anchorTeleport(targetCFrame)
+    elseif teleportMethod == 2 then
+        stepTeleport(targetCFrame)
+    elseif teleportMethod == 3 then
+        tweenTeleport(targetCFrame)
+    elseif teleportMethod == 4 then
+        bodyPosTeleport(targetCFrame)
+    end
 end
 
 -- =============================================
@@ -465,39 +576,45 @@ end
 
 createSeparator("TELEPORT", 13)
 
-createButton("Save Base Position", 14, function()
+createButton("Switch TP Method (1-4)", 14, function()
+    teleportMethod = teleportMethod + 1
+    if teleportMethod > 4 then teleportMethod = 1 end
+    local names = {"Anchor", "Step", "Tween", "BodyPosition"}
+    print("TP Method: " .. teleportMethod .. " (" .. names[teleportMethod] .. ")")
+end)
+
+createButton("Save Base Position", 15, function()
     if rootPart then
         savedBasePos = rootPart.CFrame
         print("Base saved at: " .. tostring(rootPart.Position))
     end
 end)
 
-createButton("TP to Base", 15, function()
+createButton("TP to Base", 16, function()
     if not rootPart then return end
     if savedBasePos then
-        persistentTeleport(savedBasePos)
+        smartTeleport(savedBasePos)
     else
-        -- Fallback: try to find spawn
         local spawn = Workspace:FindFirstChild("SpawnLocation") or Workspace:FindFirstChild("Spawn")
         if spawn then
-            persistentTeleport(spawn.CFrame + Vector3.new(0, 5, 0))
+            smartTeleport(spawn.CFrame + Vector3.new(0, 5, 0))
         else
-            persistentTeleport(CFrame.new(0, 50, 0))
+            smartTeleport(CFrame.new(0, 50, 0))
         end
     end
 end)
 
-createButton("TP to Spawn", 16, function()
+createButton("TP to Spawn", 17, function()
     if not rootPart then return end
     local spawn = Workspace:FindFirstChild("SpawnLocation") or Workspace:FindFirstChild("Spawn")
     if spawn then
-        persistentTeleport(spawn.CFrame + Vector3.new(0, 5, 0))
+        smartTeleport(spawn.CFrame + Vector3.new(0, 5, 0))
     else
-        persistentTeleport(CFrame.new(0, 50, 0))
+        smartTeleport(CFrame.new(0, 50, 0))
     end
 end)
 
-createButton("TP to Nearest Lucky Block", 17, function()
+createButton("TP to Nearest Lucky Block", 18, function()
     if not rootPart then return end
     local closest = nil
     local closestDist = math.huge
@@ -514,7 +631,7 @@ createButton("TP to Nearest Lucky Block", 17, function()
     end
 
     if closest then
-        persistentTeleport(closest.CFrame + Vector3.new(0, 5, 0))
+        smartTeleport(closest.CFrame + Vector3.new(0, 5, 0))
     end
 end)
 
