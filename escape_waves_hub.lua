@@ -27,6 +27,7 @@ local toggles = {
     speedBoost = false,
     noclip = false,
     godmode = false,
+    antiTampar = false,
     antiAfk = false,
     autoCollect = false,
     autoSteal = false,
@@ -354,6 +355,60 @@ createToggle("godmode", "God Mode", 6, function(enabled)
             humanoid.MaxHealth = 100
             humanoid.Health = 100
         end
+    end
+end)
+
+-- =============================================
+-- FEATURE: ANTI-TAMPARAN (Anti-Slap/Fling)
+-- =============================================
+
+local antiTamparConn = nil
+
+local function setupAntiTampar()
+    -- Disconnect old listener if exists
+    if antiTamparConn then
+        pcall(function() antiTamparConn:Disconnect() end)
+    end
+    
+    if not character then return end
+    
+    -- Monitor ALL parts in character for added forces/movers
+    antiTamparConn = character.DescendantAdded:Connect(function(obj)
+        if not toggles.antiTampar then return end
+        
+        -- Slap tools add BodyVelocity/BodyForce/BodyPosition to fling you
+        if obj:IsA("BodyVelocity") or obj:IsA("BodyForce") or 
+           obj:IsA("BodyAngularVelocity") or obj:IsA("BodyThrust") or
+           obj:IsA("RocketPropulsion") or obj:IsA("LinearVelocity") or
+           obj:IsA("VectorForce") or obj:IsA("LineForce") then
+            -- Check if it's NOT our own AutoTP
+            if obj.Name ~= "EW_AutoTP" then
+                wait() -- Wait 1 frame so it registers
+                pcall(function() obj:Destroy() end)
+                print("Anti-Tampar: Blocked " .. obj.ClassName .. "!")
+                -- Zero velocity immediately
+                pcall(function()
+                    if rootPart then
+                        rootPart.Velocity = Vector3.new(0, 0, 0)
+                        rootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                        rootPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+                    end
+                end)
+            end
+        end
+    end)
+end
+
+createToggle("antiTampar", "Anti-Tamparan", 7, function(enabled)
+    if enabled then
+        setupAntiTampar()
+        print("Anti-Tamparan: ON - Kebal dari tamparan!")
+    else
+        if antiTamparConn then
+            pcall(function() antiTamparConn:Disconnect() end)
+            antiTamparConn = nil
+        end
+        print("Anti-Tamparan: OFF")
     end
 end)
 
@@ -747,6 +802,19 @@ RunService.Heartbeat:Connect(function()
         if humanoid.JumpPower < 150 then
             humanoid.JumpPower = 150
         end
+    end
+
+    -- ANTI-TAMPARAN (zero velocity to prevent fling)
+    if toggles.antiTampar then
+        pcall(function()
+            local vel = rootPart.AssemblyLinearVelocity
+            -- If velocity is abnormally high (being flung), zero it
+            if vel.Magnitude > 80 then
+                rootPart.Velocity = Vector3.new(0, 0, 0)
+                rootPart.AssemblyLinearVelocity = Vector3.new(0, vel.Y, 0)
+                rootPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+            end
+        end)
     end
 end)
 
