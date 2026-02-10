@@ -394,24 +394,110 @@ createToggle("autoSteal", "Auto Steal Blocks", 12, function(enabled)
 end)
 
 -- =============================================
--- INSTANT BUTTONS
+-- ANTI-SNAPBACK TELEPORT SYSTEM
+-- =============================================
+
+local savedBasePos = nil
+local isTeleporting = false
+
+-- Remove all BodyMovers that pull character back
+local function removeBodyMovers()
+    if not character then return end
+    pcall(function()
+        for _, part in pairs(character:GetDescendants()) do
+            if part:IsA("BodyPosition") or part:IsA("BodyVelocity") or 
+               part:IsA("BodyGyro") or part:IsA("BodyForce") or
+               part:IsA("BodyAngularVelocity") or part:IsA("BodyThrust") or
+               part:IsA("RocketPropulsion") or part:IsA("LinearVelocity") or
+               part:IsA("AlignPosition") then
+                part:Destroy()
+            end
+        end
+    end)
+end
+
+-- Zero out all velocity
+local function zeroVelocity()
+    pcall(function()
+        if rootPart then
+            rootPart.Velocity = Vector3.new(0, 0, 0)
+            rootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+            rootPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+        end
+    end)
+end
+
+-- Persistent teleport: sets CFrame repeatedly to prevent snapback
+local function persistentTeleport(targetCFrame)
+    if isTeleporting then return end
+    isTeleporting = true
+    
+    spawn(function()
+        -- Phase 1: Remove forces & initial teleport
+        removeBodyMovers()
+        zeroVelocity()
+        
+        -- Phase 2: Hold position for 30 frames (~0.5 seconds)
+        local holdFrames = 30
+        local conn
+        local count = 0
+        
+        conn = RunService.Heartbeat:Connect(function()
+            count = count + 1
+            pcall(function()
+                rootPart.CFrame = targetCFrame
+                zeroVelocity()
+                removeBodyMovers()
+            end)
+            
+            if count >= holdFrames then
+                conn:Disconnect()
+                isTeleporting = false
+                print("Teleport complete!")
+            end
+        end)
+    end)
+end
+
+-- =============================================
+-- TELEPORT BUTTONS
 -- =============================================
 
 createSeparator("TELEPORT", 13)
 
-createButton("TP to Spawn", 14, function()
+createButton("Save Base Position", 14, function()
     if rootPart then
-        -- Most maps have spawn near origin
+        savedBasePos = rootPart.CFrame
+        print("Base saved at: " .. tostring(rootPart.Position))
+    end
+end)
+
+createButton("TP to Base", 15, function()
+    if not rootPart then return end
+    if savedBasePos then
+        persistentTeleport(savedBasePos)
+    else
+        -- Fallback: try to find spawn
         local spawn = Workspace:FindFirstChild("SpawnLocation") or Workspace:FindFirstChild("Spawn")
         if spawn then
-            rootPart.CFrame = spawn.CFrame + Vector3.new(0, 5, 0)
+            persistentTeleport(spawn.CFrame + Vector3.new(0, 5, 0))
         else
-            rootPart.CFrame = CFrame.new(0, 50, 0)
+            persistentTeleport(CFrame.new(0, 50, 0))
         end
     end
 end)
 
-createButton("TP to Nearest Lucky Block", 15, function()
+createButton("TP to Spawn", 16, function()
+    if not rootPart then return end
+    local spawn = Workspace:FindFirstChild("SpawnLocation") or Workspace:FindFirstChild("Spawn")
+    if spawn then
+        persistentTeleport(spawn.CFrame + Vector3.new(0, 5, 0))
+    else
+        persistentTeleport(CFrame.new(0, 50, 0))
+    end
+end)
+
+createButton("TP to Nearest Lucky Block", 17, function()
     if not rootPart then return end
     local closest = nil
     local closestDist = math.huge
@@ -428,7 +514,7 @@ createButton("TP to Nearest Lucky Block", 15, function()
     end
 
     if closest then
-        rootPart.CFrame = closest.CFrame + Vector3.new(0, 5, 0)
+        persistentTeleport(closest.CFrame + Vector3.new(0, 5, 0))
     end
 end)
 
