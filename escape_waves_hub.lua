@@ -576,35 +576,78 @@ end
 
 createSeparator("TELEPORT", 13)
 
-createButton("Switch TP Method (1-4)", 14, function()
-    teleportMethod = teleportMethod + 1
-    if teleportMethod > 4 then teleportMethod = 1 end
-    local names = {"Anchor", "Step", "Tween", "BodyPosition"}
-    print("TP Method: " .. teleportMethod .. " (" .. names[teleportMethod] .. ")")
-end)
+-- AUTO TP TO BASE - The killer feature
+-- Creates a PERSISTENT BodyPosition that continuously pulls to base
+local autoTPActive = false
+local autoTPBodyPos = nil
 
-createButton("Save Base Position", 15, function()
+local function startAutoTP()
+    if not savedBasePos then
+        print("Save base position first!")
+        return
+    end
+    if not rootPart then return end
+    
+    autoTPActive = true
+    print("Auto TP to Base: ON - Pulling to base...")
+    
+    -- Remove any existing one
+    pcall(function()
+        if autoTPBodyPos and autoTPBodyPos.Parent then
+            autoTPBodyPos:Destroy()
+        end
+    end)
+    
+    -- Create persistent BodyPosition
+    pcall(function()
+        removeBodyMovers()
+        local bp = Instance.new("BodyPosition")
+        bp.Name = "EW_AutoTP"
+        bp.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        bp.D = 150
+        bp.P = 80000
+        bp.Position = savedBasePos.Position
+        bp.Parent = rootPart
+        autoTPBodyPos = bp
+    end)
+end
+
+local function stopAutoTP()
+    autoTPActive = false
+    pcall(function()
+        if autoTPBodyPos and autoTPBodyPos.Parent then
+            autoTPBodyPos:Destroy()
+        end
+        autoTPBodyPos = nil
+        -- Also clean any leftover
+        if rootPart then
+            for _, v in pairs(rootPart:GetChildren()) do
+                if v.Name == "EW_AutoTP" then
+                    v:Destroy()
+                end
+            end
+        end
+    end)
+    zeroVelocity()
+    print("Auto TP to Base: OFF")
+end
+
+createButton("Save Base Position", 14, function()
     if rootPart then
         savedBasePos = rootPart.CFrame
         print("Base saved at: " .. tostring(rootPart.Position))
     end
 end)
 
-createButton("TP to Base", 16, function()
-    if not rootPart then return end
-    if savedBasePos then
-        smartTeleport(savedBasePos)
+createToggle("autoTP", "Auto TP to Base", 15, function(enabled)
+    if enabled then
+        startAutoTP()
     else
-        local spawn = Workspace:FindFirstChild("SpawnLocation") or Workspace:FindFirstChild("Spawn")
-        if spawn then
-            smartTeleport(spawn.CFrame + Vector3.new(0, 5, 0))
-        else
-            smartTeleport(CFrame.new(0, 50, 0))
-        end
+        stopAutoTP()
     end
 end)
 
-createButton("TP to Spawn", 17, function()
+createButton("TP to Spawn", 16, function()
     if not rootPart then return end
     local spawn = Workspace:FindFirstChild("SpawnLocation") or Workspace:FindFirstChild("Spawn")
     if spawn then
@@ -614,7 +657,7 @@ createButton("TP to Spawn", 17, function()
     end
 end)
 
-createButton("TP to Nearest Lucky Block", 18, function()
+createButton("TP to Nearest Lucky Block", 17, function()
     if not rootPart then return end
     local closest = nil
     local closestDist = math.huge
@@ -632,6 +675,38 @@ createButton("TP to Nearest Lucky Block", 18, function()
 
     if closest then
         smartTeleport(closest.CFrame + Vector3.new(0, 5, 0))
+    end
+end)
+
+-- Auto TP guardian: re-create BodyPosition if the game removes it
+spawn(function()
+    while wait(0.3) do
+        if autoTPActive and savedBasePos and rootPart then
+            pcall(function()
+                -- Check if BodyPosition still exists
+                local found = false
+                for _, v in pairs(rootPart:GetChildren()) do
+                    if v.Name == "EW_AutoTP" and v:IsA("BodyPosition") then
+                        -- Update position in case base was re-saved
+                        v.Position = savedBasePos.Position
+                        found = true
+                        break
+                    end
+                end
+                
+                -- Re-create if game destroyed it
+                if not found then
+                    local bp = Instance.new("BodyPosition")
+                    bp.Name = "EW_AutoTP"
+                    bp.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+                    bp.D = 150
+                    bp.P = 80000
+                    bp.Position = savedBasePos.Position
+                    bp.Parent = rootPart
+                    autoTPBodyPos = bp
+                end
+            end)
+        end
     end
 end)
 
