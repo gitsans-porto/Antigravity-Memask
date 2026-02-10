@@ -28,6 +28,7 @@ local toggles = {
     noclip = false,
     godmode = false,
     antiTampar = false,
+    superTampar = false,
     antiAfk = false,
     autoCollect = false,
     autoSteal = false,
@@ -359,56 +360,196 @@ createToggle("godmode", "God Mode", 6, function(enabled)
 end)
 
 -- =============================================
--- FEATURE: ANTI-TAMPARAN (Anti-Slap/Fling)
+-- FEATURE: ANTI-TAMPARAN v2 (Position Lock)
 -- =============================================
 
-local antiTamparConn = nil
+local antiTamparConns = {}
+local lastSafePos = nil
+local lastSafeTime = tick()
+local FLING_THRESHOLD = 50 -- velocity magnitude that counts as flung
+
+local function cleanAntiTamparConns()
+    for _, conn in pairs(antiTamparConns) do
+        pcall(function() conn:Disconnect() end)
+    end
+    antiTamparConns = {}
+end
 
 local function setupAntiTampar()
-    -- Disconnect old listener if exists
-    if antiTamparConn then
-        pcall(function() antiTamparConn:Disconnect() end)
-    end
+    cleanAntiTamparConns()
+    if not character or not rootPart then return end
     
-    if not character then return end
+    -- Save initial safe position
+    lastSafePos = rootPart.CFrame
+    lastSafeTime = tick()
     
-    -- Monitor ALL parts in character for added forces/movers
-    antiTamparConn = character.DescendantAdded:Connect(function(obj)
-        if not toggles.antiTampar then return end
+    -- LAYER 1: RenderStepped (FASTEST - runs before every frame render)
+    -- Saves position when normal, snaps back when flung
+    table.insert(antiTamparConns, RunService.RenderStepped:Connect(function()
+        if not toggles.antiTampar or not rootPart or not rootPart.Parent then return end
         
-        -- Slap tools add BodyVelocity/BodyForce/BodyPosition to fling you
-        if obj:IsA("BodyVelocity") or obj:IsA("BodyForce") or 
-           obj:IsA("BodyAngularVelocity") or obj:IsA("BodyThrust") or
-           obj:IsA("RocketPropulsion") or obj:IsA("LinearVelocity") or
-           obj:IsA("VectorForce") or obj:IsA("LineForce") then
-            -- Check if it's NOT our own AutoTP
-            if obj.Name ~= "EW_AutoTP" then
-                wait() -- Wait 1 frame so it registers
-                pcall(function() obj:Destroy() end)
-                print("Anti-Tampar: Blocked " .. obj.ClassName .. "!")
-                -- Zero velocity immediately
-                pcall(function()
-                    if rootPart then
-                        rootPart.Velocity = Vector3.new(0, 0, 0)
-                        rootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-                        rootPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+        pcall(function()
+            local vel = rootPart.AssemblyLinearVelocity
+            local horizontalVel = Vector3.new(vel.X, 0, vel.Z).Magnitude
+            
+            if horizontalVel > FLING_THRESHOLD then
+                -- BEING FLUNG! Snap back to last safe position
+                rootPart.CFrame = lastSafePos
+                rootPart.Velocity = Vector3.new(0, 0, 0)
+                rootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                rootPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+                
+                -- Also remove any forces
+                for _, part in pairs(character:GetDescendants()) do
+                    if (part:IsA("BodyVelocity") or part:IsA("BodyForce") or
+                        part:IsA("BodyAngularVelocity") or part:IsA("BodyThrust") or
+                        part:IsA("LinearVelocity") or part:IsA("VectorForce") or
+                        part:IsA("LineForce") or part:IsA("BodyPosition") or
+                        part:IsA("AlignPosition") or part:IsA("RocketPropulsion")) and
+                        part.Name ~= "EW_AutoTP" then
+                        part:Destroy()
                     end
-                end)
+                end
+            else
+                -- Normal movement - save as safe position
+                -- Only update every 0.1s to avoid saving mid-fling positions
+                if tick() - lastSafeTime > 0.1 then
+                    lastSafePos = rootPart.CFrame
+                    lastSafeTime = tick()
+                end
             end
+        end)
+    end))
+    
+    -- LAYER 2: DescendantAdded - destroy any forces added by others
+    table.insert(antiTamparConns, character.DescendantAdded:Connect(function(obj)
+        if not toggles.antiTampar then return end
+        pcall(function()
+            if (obj:IsA("BodyVelocity") or obj:IsA("BodyForce") or
+                obj:IsA("BodyAngularVelocity") or obj:IsA("BodyThrust") or
+                obj:IsA("LinearVelocity") or obj:IsA("VectorForce") or
+                obj:IsA("LineForce") or obj:IsA("RocketPropulsion")) and
+                obj.Name ~= "EW_AutoTP" then
+                obj:Destroy()
+                print("Anti-Tampar: Destroyed " .. obj.ClassName)
+            end
+        end)
+    end))
+    
+    -- LAYER 3: Humanoid state change - prevent ragdoll/physics state
+    table.insert(antiTamparConns, humanoid.StateChanged:Connect(function(_, newState)
+        if not toggles.antiTampar then return end
+        -- Block states that slaps use to fling
+        if newState == Enum.HumanoidStateType.Physics or
+           newState == Enum.HumanoidStateType.Ragdoll or
+           newState == Enum.HumanoidStateType.FallingDown or
+           newState == Enum.HumanoidStateType.PlatformStanding then
+            humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
         end
-    end)
+    end))
 end
 
 createToggle("antiTampar", "Anti-Tamparan", 7, function(enabled)
     if enabled then
         setupAntiTampar()
-        print("Anti-Tamparan: ON - Kebal dari tamparan!")
+        print("Anti-Tamparan v2: ON - Position Lock aktif!")
     else
-        if antiTamparConn then
-            pcall(function() antiTamparConn:Disconnect() end)
-            antiTamparConn = nil
-        end
+        cleanAntiTamparConns()
         print("Anti-Tamparan: OFF")
+    end
+end)
+
+-- =============================================
+-- FEATURE: SUPER TAMPARAN (2x Slap Power)
+-- =============================================
+
+local superTamparConns = {}
+
+local function cleanSuperTamparConns()
+    for _, conn in pairs(superTamparConns) do
+        pcall(function() conn:Disconnect() end)
+    end
+    superTamparConns = {}
+end
+
+local function setupSuperTampar()
+    cleanSuperTamparConns()
+    
+    -- Monitor ALL other players for BodyVelocity being added
+    -- When our slap tool hits them, the server adds a BodyVelocity
+    -- We amplify it by 2x
+    for _, otherPlayer in pairs(Players:GetPlayers()) do
+        if otherPlayer ~= player and otherPlayer.Character then
+            local conn = otherPlayer.Character.DescendantAdded:Connect(function(obj)
+                if not toggles.superTampar then return end
+                pcall(function()
+                    if obj:IsA("BodyVelocity") then
+                        -- Amplify velocity 2x
+                        wait()
+                        if obj and obj.Parent then
+                            obj.Velocity = obj.Velocity * 2
+                            obj.MaxForce = obj.MaxForce * 2
+                            print("Super Tampar: Amplified hit on " .. otherPlayer.Name)
+                        end
+                    elseif obj:IsA("LinearVelocity") then
+                        wait()
+                        if obj and obj.Parent then
+                            obj.VectorVelocity = obj.VectorVelocity * 2
+                            print("Super Tampar: Amplified LinearVelocity on " .. otherPlayer.Name)
+                        end
+                    elseif obj:IsA("VectorForce") then
+                        wait()
+                        if obj and obj.Parent then
+                            obj.Force = obj.Force * 2
+                            print("Super Tampar: Amplified Force on " .. otherPlayer.Name)
+                        end
+                    elseif obj:IsA("BodyForce") then
+                        wait()
+                        if obj and obj.Parent then
+                            obj.Force = obj.Force * 2
+                            print("Super Tampar: Amplified BodyForce on " .. otherPlayer.Name)
+                        end
+                    end
+                end)
+            end)
+            table.insert(superTamparConns, conn)
+        end
+    end
+    
+    -- Also monitor new players joining
+    table.insert(superTamparConns, Players.PlayerAdded:Connect(function(newPlayer)
+        if not toggles.superTampar then return end
+        newPlayer.CharacterAdded:Connect(function(char)
+            if not toggles.superTampar then return end
+            local conn = char.DescendantAdded:Connect(function(obj)
+                if not toggles.superTampar then return end
+                pcall(function()
+                    if obj:IsA("BodyVelocity") then
+                        wait()
+                        if obj and obj.Parent then
+                            obj.Velocity = obj.Velocity * 2
+                            obj.MaxForce = obj.MaxForce * 2
+                        end
+                    elseif obj:IsA("LinearVelocity") then
+                        wait()
+                        if obj and obj.Parent then
+                            obj.VectorVelocity = obj.VectorVelocity * 2
+                        end
+                    end
+                end)
+            end)
+            table.insert(superTamparConns, conn)
+        end)
+    end))
+end
+
+createToggle("superTampar", "Super Tamparan (2x)", 8, function(enabled)
+    if enabled then
+        setupSuperTampar()
+        print("Super Tamparan: ON - Tamparan 2x lebih kuat!")
+    else
+        cleanSuperTamparConns()
+        print("Super Tamparan: OFF")
     end
 end)
 
@@ -804,18 +945,7 @@ RunService.Heartbeat:Connect(function()
         end
     end
 
-    -- ANTI-TAMPARAN (zero velocity to prevent fling)
-    if toggles.antiTampar then
-        pcall(function()
-            local vel = rootPart.AssemblyLinearVelocity
-            -- If velocity is abnormally high (being flung), zero it
-            if vel.Magnitude > 80 then
-                rootPart.Velocity = Vector3.new(0, 0, 0)
-                rootPart.AssemblyLinearVelocity = Vector3.new(0, vel.Y, 0)
-                rootPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
-            end
-        end)
-    end
+    -- ANTI-TAMPARAN now handled by RenderStepped (faster than Heartbeat)
 end)
 
 -- =============================================
